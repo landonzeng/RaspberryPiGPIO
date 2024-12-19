@@ -47,6 +47,14 @@ public class GpioService : BackgroundService
     /// 新增标志位，防止自动蜂鸣
     /// </summary>
     private bool _preventAutoBeep = false;
+    /// <summary>
+    /// 存储上一次有效湿度
+    /// </summary>
+    private float _lastValidHumidity = -1;
+    /// <summary>
+    /// 存储上一次有效温度
+    /// </summary>
+    private float _lastValidTemperature = -1;
 
     /// <summary>
     /// 构造函数
@@ -243,28 +251,76 @@ public class GpioService : BackgroundService
         {
             await Task.Delay(500, stoppingToken);
 
+            // 尝试读取数据，并进行有效性检查
             if (ReadDht11Data())
             {
-                Log.Information($"湿度：{_dht11Data[0]}.{_dht11Data[1]}%\t温度：{_dht11Data[2]}.{_dht11Data[3]}℃\t蜂鸣器状态:{_dht11Data[5]}\t蜂鸣器控制值:{_dht11Data[6]}");
-                _dataStore.HoldingRegisters[0] = (ushort)(_dht11Data[2] * 10 + _dht11Data[3]);
-                _dataStore.HoldingRegisters[2] = (ushort)(_dht11Data[0] * 10 + _dht11Data[1]);
-                _dataStore.HoldingRegisters[4] = (ushort)_dht11Data[5];
-                _dataStore.HoldingRegisters[5] = (ushort)_dht11Data[6];
-
-                if (_dht11Data[0] <= 40)
+                if (IsValidDht11Data())
                 {
-                    _preventAutoBeep = false; // 当湿度低于40%时，允许再次自动蜂鸣
-                }
+                    // 更新上一次有效值
+                    _lastValidHumidity = _dht11Data[0] * 10 + _dht11Data[1];
+                    _lastValidTemperature = _dht11Data[2] * 10 + _dht11Data[3];
 
-                if (_autoBeepEnabled && !_preventAutoBeep && _dht11Data[0] > 40)
-                {
-                    ControlBuzzer(true);
+                    Log.Information($"湿度：{_dht11Data[0]}.{_dht11Data[1]}%\t温度：{_dht11Data[2]}.{_dht11Data[3]}℃\t蜂鸣器状态:{_dht11Data[5]}\t蜂鸣器控制值:{_dht11Data[6]}");
+
+                    // 更新数据存储
+                    _dataStore.HoldingRegisters[0] = (ushort)(_dht11Data[2] * 10 + _dht11Data[3]);
+                    _dataStore.HoldingRegisters[2] = (ushort)(_dht11Data[0] * 10 + _dht11Data[1]);
+                    _dataStore.HoldingRegisters[4] = (ushort)_dht11Data[5];
+                    _dataStore.HoldingRegisters[5] = (ushort)_dht11Data[6];
+
+                    // 处理自动蜂鸣
+                    HandleBuzzer();
                 }
                 else
                 {
-                    ControlBuzzer(false);
+                    //Log.Warning("读取到无效的湿度或温度数据，尝试重新读取。");
+                    // 如果读取到无效数据，使用上一次有效值
+                    DisplayLastValidData();
                 }
             }
+            else
+            {
+                //Log.Warning("DHT11数据读取失败，尝试重新读取。");
+                // 如果读取失败，使用上一次有效值
+                DisplayLastValidData();
+            }
+        }
+    }
+
+    private bool IsValidDht11Data()
+    {
+        // 检查湿度和温度是否在合理范围内
+        int humidity = _dht11Data[0] * 10 + _dht11Data[1];
+        int temperature = _dht11Data[2] * 10 + _dht11Data[3];
+
+        return humidity >= 0 && humidity <= 1000 && temperature >= -500 && temperature <= 1000; // 例如，湿度范围0-1000，温度范围-500-1000
+    }
+
+    private void DisplayLastValidData()
+    {
+        if (_lastValidHumidity != -1 && _lastValidTemperature != -1)
+        {
+            //Log.Information($"使用上一次有效值：湿度：{_lastValidHumidity / 10.0}%\t温度：{_lastValidTemperature / 10.0}℃");
+            _dataStore.HoldingRegisters[0] = (ushort)_lastValidTemperature;
+            _dataStore.HoldingRegisters[2] = (ushort)_lastValidHumidity;
+        }
+    }
+
+
+    private void HandleBuzzer()
+    {
+        if (_dht11Data[0] <= 40)
+        {
+            _preventAutoBeep = false; // 允许自动蜂鸣
+        }
+
+        if (_autoBeepEnabled && !_preventAutoBeep && _dht11Data[0] > 40)
+        {
+            ControlBuzzer(true);
+        }
+        else
+        {
+            ControlBuzzer(false);
         }
     }
 
