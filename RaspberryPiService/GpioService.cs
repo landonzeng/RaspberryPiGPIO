@@ -55,6 +55,10 @@ public class GpioService : BackgroundService
     /// 存储上一次有效温度
     /// </summary>
     private float _lastValidTemperature = -1;
+    /// <summary>
+    /// 定义信号量
+    /// </summary>
+    private readonly SemaphoreSlim _buzzerLock = new SemaphoreSlim(1, 1);
 
     /// <summary>
     /// 构造函数
@@ -196,6 +200,7 @@ public class GpioService : BackgroundService
                         _manualBeepEnabled = false;
                         ControlBuzzer(false); // 立即关闭蜂鸣器
                         _preventAutoBeep = true; // 阻止自动蜂鸣
+                        _dht11Data[5] = 0; // 确保状态更新
                         break;
                     case 1:
                         Log.Information($"启动湿度超过40%自动蜂鸣");
@@ -207,6 +212,7 @@ public class GpioService : BackgroundService
                         _manualBeepEnabled = false;
                         _autoBeepEnabled = false;
                         ControlBuzzer(false); // 立即关闭蜂鸣器
+                        _dht11Data[5] = 0; // 确保状态更新
                         break;
                     case 3:
                         Log.Information($"手动启动蜂鸣器蜂鸣");
@@ -333,21 +339,30 @@ public class GpioService : BackgroundService
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            if (_manualBeepEnabled)
+            await _buzzerLock.WaitAsync(); // 等待信号量
+            try
             {
-                await BeepPatternAsync(2, 1000);
-                _dht11Data[5] = 1; // 确保蜂鸣器状态为1
+                if (_manualBeepEnabled)
+                {
+                    await BeepPatternAsync(2, 1000);
+                    _dht11Data[5] = 1; // 确保蜂鸣器状态为1
+                }
+                else if (_isBuzzerActive)
+                {
+                    await BeepPatternAsync(1, 440);
+                    _dht11Data[5] = 1; // 确保蜂鸣器状态为1
+                }
+                else
+                {
+                    _gpio.Write(_buzzerPin, PinValue.Low);
+                    _dht11Data[5] = 0; // 确保蜂鸣器状态为0
+                }
             }
-            else if (_isBuzzerActive)
+            finally
             {
-                await BeepPatternAsync(1, 440);
-                _dht11Data[5] = 1; // 确保蜂鸣器状态为1
+                _buzzerLock.Release(); // 释放信号量
             }
-            else
-            {
-                _gpio.Write(_buzzerPin, PinValue.Low);
-                _dht11Data[5] = 0; // 确保蜂鸣器状态为0
-            }
+
             await Task.Delay(1000, stoppingToken);
         }
     }
